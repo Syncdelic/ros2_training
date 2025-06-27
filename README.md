@@ -1,270 +1,189 @@
-# ROS 2 Fundamentals & Orange Pi Zero 3 → ESP32‑S3 Workshop
+# ROS 2 Jazzy Jalisco — Quick‑Start README
 
-> **Goal for this repository**
-> *Build a rock‑solid foundation for ROS 2 on ARM SBCs and prepare for micro‑ROS on an ESP32‑S3 DevKit RGB LED demo.*
-> This training is structured into **four major phases**:
->
-> 1. **Linux & Kernel Fundamentals**: Learn how Linux distributions and kernels relate to ROS 2 (Jazzy Jalisco), and how to install them on a headless server (e.g. Orange Pi Zero 3). Understand kernel modules, compatibility, and simulation capability in minimal installs.
-> 2. **Core ROS 2 Concepts**: Set up a Hello World publisher/subscriber, understand topics, QoS, and network-level details (UDP, multicast, IP, ports, etc.).
-> 3. **micro-ROS Communication**: Connect and program an ESP32-S3 DevKit using micro-ROS to receive ROS 2 messages and actuate an RGB LED. Explore agent/client setup, transport layers (UDP/Serial), and real-time OS integration.
-> 4. **ROS 2 Simulation with AMCL**: Introduce simulation using Gazebo or RViz, load a provided AMCL (Adaptive Monte Carlo Localization) map, and demonstrate basic 2D localization and movement in a known environment.
+A concise path from a clean OS install to a running Navigation2 simulation, with the **core ROS 2 concepts and CLI workflow you’ll use every day**.
 
 ---
 
-## 0  Repository topology
+\## 1 Why Armbian 25 (arm64) *or* Ubuntu 24.04 (x86₆₄)
 
-```
-ros2‑esp32‑training/
-├── README.md               ← **THIS** doc
-├── docs/
-│   ├── architecture.md     ← diagrams & deep dives (TBD)
-│   └── networking.md       ← DDS/RTPS notes (TBD)
-├── ros2_ws/                ← classic ROS 2 Colcon workspace
-│   └── src/
-│       └── demo_nodes_cpp/ ← talker / listener sources copied for reference
-└── scripts/
-    ├── install_ros2_jazzy.sh
-    └── test_talker_listener.sh
+|                     | Ubuntu 24.04 LTS                          | Armbian 25 (Noble arm64)                               |
+| ------------------- | ----------------------------------------- | ------------------------------------------------------ |
+| **Kernel**          | 6.8 generic; optional PREEMPT‑RT via repo | 6.8‑rt **enabled by default** (low‑jitter motor loops) |
+| **Package base**    | Official Canonical packages               | Same Noble packages + SBC tweaks                       |
+| **Target hardware** | Laptops / NUCs                            | Raspberry Pi, Jetson, RK3588, etc.                     |
+
+Both distros ship the libraries ROS 2 Jazzy depends on and allow deterministic scheduling (RT patches) for real‑time control on a rover. Choose Ubuntu for x86 dev boxes, Armbian for ARM SBCs on the robot.
+
+---
+
+\## 2 Install ROS 2 Jazzy Jalisco
+Follow the official guide (works for both Ubuntu 24.04 and Armbian 25):
+[https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html](https://docs.ros.org/en/jazzy/Installation/Ubuntu-Install-Debs.html)
+
+After finishing, add to `~/.bashrc`:
+
+```bash
+source /opt/ros/jazzy/setup.bash
 ```
 
 ---
 
-## 1  Host hardware & OS choices
+\## 3 ROS 2 Fundamentals
 
-| SBC                                   | Recommended OS                       | Kernel        | Why we pick it                                                                                                                                                                     |
-| ------------------------------------- | ------------------------------------ | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Orange Pi Zero 3 (Allwinner H618)** | Armbian 25 *or* Ubuntu 24.04 (Noble) | **6.1.x LTS** | 6.1 is a long‑term‑support kernel (EOL Dec‑2026) already **main‑line** for H618, giving modern I²C/SPI drivers, ext4 improvements, eBPF, and PREEMPT\_RT patches in the same tree. |
+### 3.1 Concepts
 
-> Check your running kernel:
->
-> ```bash
-> uname -a   # expect ... 6.1.*
-> ```
+| Term          | What it is                               | Example                                        |
+| ------------- | ---------------------------------------- | ---------------------------------------------- |
+| **Node**      | Independent process that does one job    | `/locomotion_node` publishes wheel speeds      |
+| **Topic**     | Stream of messages (pub‑sub)             | `/cmd_vel` geometry\_msgs/Twist                |
+| **Service**   | Synchronous request/response             | `/reset_odometry` std\_srvs/Empty              |
+| **Action**    | Long‑running goal with feedback & cancel | `/navigate_to_pose` nav2\_msgs/ NavigateToPose |
+| **Parameter** | Runtime config value scoped to a node    | `planner.max_accel:=2.0`                       |
+| **Launch**    | Python file that starts many nodes       | `ros2 launch my_robot bringup.launch.py`       |
 
-### Armbian vs Ubuntu Noble
+### 3.2 Why ROS 2 > ROS 1 (Noetic)
 
-|                | Armbian 25.x                                              | Ubuntu 24.04 (server)                           |
-| -------------- | --------------------------------------------------------- | ----------------------------------------------- |
-| Image size     | minimal (headless)                                        | larger                                          |
-| Kernel cadence | bleeding‑edge backports (e.g. 6.12‑rc on nightly)         | distro‑maintained 6.1.x                         |
-| Default user   | *root/1234* then *armbian-config*                         | *ubuntu/ubuntu*                                 |
-| Pros           | board tweaks (u‑boot overlays, HW accel), great CLI tools | official ROS 2 binaries are built **for Noble** |
-| Cons           | ROS 2 binaries require manual repo pins                   | slightly heavier                                |
-
-**Rule of thumb:** pick **Ubuntu 24.04** if you want turnkey ROS 2 packages; choose **Armbian** for bare‑bones IoT images or if you need extra peripherals.
-
-Yes, even Ubuntu Server (headless) can support simulation, as long as you install headless-compatible versions of RViz or Gazebo, or connect via X11/SSH with GUI forwarding or use a VNC server.
+* **No ROS master** – discovery via DDS → nodes can start/stop anytime.
+* **QoS profiles** – choose reliability per topic (reliable vs best‑effort, transient local, etc.).
+* **Real‑time friendly** – lock‑free middle‑ware + RT kernels.
+* **Security** – SROS 2, DDS‑Secure.
+* **ROS 2 CLI** – richer, modular sub‑commands (`ros2 <verb>`).
 
 ---
 
-## 2  Installing ROS 2 Jazzy Jalisco (on Armbian 25.5 Noble)
+\## 4 CLI Workflow Cheat‑Sheet (Hello‑World demo)
 
-> **Goal:** end up with a minimal but *ROS‑ready* CLI image that can build & run the demo talker/listener and future micro‑ROS agents.
->
-> Tested on `6.12.30-current-sunxi64` (Orange Pi Zero 3).
+> We’ll create a tiny publisher (**talker**) and subscriber (**listener**) then explore the CLI—including the fun `ros2 wtf` doctor.
 
-### 2.1  System prep & locale
+1. **Create workspace & package**
 
 ```bash
-sudo apt update && sudo apt upgrade -y   # pull latest security fixes
-sudo apt install -y curl gnupg lsb-release software-properties-common locales
-
-# (optional) set UTF‑8 locale to avoid Python warnings in colcon
-sudo locale-gen en_US en_US.UTF-8
-sudo update-locale LANG=en_US.UTF-8
-export LANG=en_US.UTF-8
+mkdir -p ~/mdrs_ws/src && cd ~/mdrs_ws
+ros2 pkg create --build-type ament_python py_demo
 ```
 
-### 2.2  Add the ROS 2 repository (keyring‑based)
+2. **Add talker.py** (`py_demo/py_demo/talker.py`)
 
-```bash
-sudo mkdir -p /etc/apt/keyrings
-curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc \
-  | sudo gpg --dearmor -o /etc/apt/keyrings/ros-archive-keyring.gpg
+```python
+import rclpy, time
+from rclpy.node import Node
+from std_msgs.msg import String
+class Talker(Node):
+    def __init__(self):
+        super().__init__('talker')
+        self.pub = self.create_publisher(String, 'chatter', 10)
+        self.create_timer(1.0, self.timer_cb)
+    def timer_cb(self):
+        msg = String(data=f"hello at {time.time():.0f}")
+        self.pub.publish(msg)
+        self.get_logger().info(f"Published: {msg.data}")
 
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/ros-archive-keyring.gpg] \
-  http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" | \
-  sudo tee /etc/apt/sources.list.d/ros2.list
+def main():
+    rclpy.init()
+    rclpy.spin(Talker())
+    rclpy.shutdown()
+if __name__ == '__main__':
+    main()
 ```
 
-Check that APT sees the repo:
+3. **Add listener.py** (`py_demo/py_demo/listener.py`)
 
-```bash
-apt policy ros-jazzy-desktop | grep Candidate    # should show a version string
+```python
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String
+class Listener(Node):
+    def __init__(self):
+        super().__init__('listener')
+        self.create_subscription(String, 'chatter', self.cb, 10)
+    def cb(self, msg):
+        self.get_logger().info(f"I heard: {msg.data}")
+
+def main():
+    rclpy.init()
+    rclpy.spin(Listener())
+    rclpy.shutdown()
+if __name__ == '__main__':
+    main()
 ```
 
-### 2.3  Install a ROS 2 *profile*
+4. **Declare executables** in `setup.py`:
 
-Pick **one** of these meta‑packages:
-
-| Profile                  | Packages                          | Footprint | Use‑case                                     |
-| ------------------------ | --------------------------------- | --------- | -------------------------------------------- |
-| `ros-jazzy-ros-base`     | core client libs + CLI + launch   | \~280 MB  | headless SBCs, micro‑ROS agent only          |
-| `ros-jazzy-desktop`      | base + RViz2 + demos              | \~650 MB  | you’ll VNC/ssh‑X into the board occasionally |
-| `ros-jazzy-desktop-full` | desktop + simulators + perception | >1 GB     | if the SBC *is* your dev machine             |
-
-For a headless robot brain we usually install **ros-base**:
-
-```bash
-sudo apt update
-sudo apt install -y ros-jazzy-ros-base    # or ros-jazzy-desktop
+```python
+    entry_points={
+        'console_scripts': [
+            'talker = py_demo.talker:main',
+            'listener = py_demo.listener:main',
+        ],
+    },
 ```
 
-### 2.4  Bootstrap the environment
+5. **Build & source**
 
 ```bash
-echo "source /opt/ros/jazzy/setup.bash" >> ~/.bashrc
-source ~/.bashrc
-```
-
-### 2.5  Developer tools & dependency resolver
-
-```bash
-sudo apt install -y python3-colcon-common-extensions python3-rosdep python3-argcomplete
-
-sudo rosdep init        # one‑time as root
-rosdep update           # as any user; grabs package index
-```
-
-### 2.6  Smoke‑test the installation (talker ↔ listener)
-
-Open **Terminal A** (SSH session #1):
-
-```bash
-ros2 run demo_nodes_cpp talker
-```
-
-Open **Terminal B** (SSH session #2):
-
-```bash
-ros2 run demo_nodes_cpp listener
-```
-
-You should see incrementing `Hello World: N` messages in Terminal B. If not, ensure UDP multicast 239.255.0.1:7400 is allowed (check `ss -ulnp | grep 7400`).
-
-### 2.7  (Option) Headless simulation capability
-
-Even without a desktop you can:
-
-```bash
-# Gazebo libraries only (no GUI)
-sudo apt install -y ros-jazzy-gazebo-ros-pkgs ros-jazzy-gazebo-dev
-
-# Launch Gazebo off‑screen
-gazebo --headless -s libgazebo_ros_factory.so &
-```
-
-Then on your *laptop*, run RViz2 and subscribe to simulation topics (`/tf`, `/scan`, etc.). For lightweight map/localisation tests we’ll use AMCL + rviz via remote.
-
-### 2.8  Create your first catkin‑less workspace (colcon)
-
-```bash
-mkdir -p ~/ros2_ws/src
-cd ~/ros2_ws
-ros2 pkg create --build-type ament_cmake my_cpp_node --dependencies rclcpp std_msgs
-
-colcon build --symlink-install
-source install/setup.bash
-ros2 run my_cpp_node my_cpp_node
-```
-
-> The above steps are scripted in `scripts/install_ros2_jazzy.sh`—feel free to run or copy‑paste pieces while learning.
-
----
-
-## 3  Create and build your first workspace
-
-  Create and build your first workspace
-
-```bash
-mkdir -p ~/ros2_ws/src
-cd ~/ros2_ws
-colcon build --symlink-installzy/setup.b
+cd ~/mdrs_ws && colcon build --symlink-install
 source install/setup.bash
 ```
 
-Copy the reference talker/listener sources for later hacking:
+6. **Run in two terminals**
 
 ```bash
-ros2 pkg create --build-type ament_cmake demo_nodes_cpp_clone --dependencies rclcpp std_msgs
-cp /opt/ros/jazzy/share/demo_nodes_cpp/src/talker.cpp src/demo_nodes_cpp_clone/
-cp /opt/ros/jazzy/share/demo_nodes_cpp/src/listener.cpp src/demo_nodes_cpp_clone/
-colcon build --packages-select demo_nodes_cpp_clone
+ros2 run py_demo talker   # T1
+ros2 run py_demo listener # T2
+```
+
+7. **Explore with CLI**
+
+```bash
+ros2 node list            # /talker /listener
+ros2 topic list           # /chatter
+ros2 topic echo /chatter  # See messages
+ros2 wtf                  # Doctor checks env & graph
 ```
 
 ---
 
-## 4  Running the classic *Hello World* (Talker ↔ Listener)
+\## 5 Launch Both Nodes (single command)
+Create `py_demo/launch/talker_listener.launch.py`:
 
-### Terminal 1 – Publisher
+```python
+from launch import LaunchDescription
+from launch_ros.actions import Node
 
-```bash
-source ~/ros2_ws/install/setup.bash
-ros2 run demo_nodes_cpp_clone talker
+def generate_launch_description():
+    return LaunchDescription([
+        Node(package='py_demo', executable='talker', name='talker'),
+        Node(package='py_demo', executable='listener', name='listener'),
+    ])
 ```
 
-### Terminal 2 – Subscriber
+Run:
 
 ```bash
-source ~/ros2_ws/install/setup.bash
-ros2 run demo_nodes_cpp_clone listener
+ros2 launch py_demo talker_listener.launch.py
 ```
 
-> You should see incrementing "Hello World: *#*" messages on the listener side.
+Both nodes now start together; verify with `ros2 node list`.
 
 ---
 
-## 5  What actually happens on the wire?
+\## 6 Navigation2 Simulation Quick‑Test
 
-| Concept          | Implementation in ROS 2                                                     |
-| ---------------- | --------------------------------------------------------------------------- |
-| **Middleware**   | DDS/RTPS (Fast‑DDS by default on Jazzy)                                     |
-| **Transport**    | UDP unicast **+** UDP multicast for discovery; TCP/SHM optional             |
-| **Discovery**    | Multicast on `239.255.0.1:7400` (port mapping `7400 + 250*domain + offset`) |
-| **Logical unit** | *Node* (executable), which owns *Publishers* & *Subscribers*                |
-| **Message bus**  | *Topics* (e.g. `/chatter`)                                                  |
-| **Isolation**    | `ROS_DOMAIN_ID` env var (0‑232) prevents cross‑talk on shared LAN           |
+```bash
+# Install
+sudo apt install ros-jazzy-navigation2 ros-jazzy-nav2-bringup
+# For TurtleBot3 on Gazebo Classic (Iron‑ or older → switch pkg names)
+export TURTLEBOT3_MODEL=waffle
+# Launch sim + Nav2 + RViz & Gazebo GUI
+ros2 launch nav2_bringup tb3_simulation_launch.py headless:=False
+```
 
-### Do I need to set IPs or open ports?
+In RViz, click **2D Nav Goal** → robot will plan & move. Use CLI to watch:
 
-* On a **flat Layer‑2 network**: **No** — DDS uses multicast to discover peers.
-* Across subnets/VLANs or Wi‑Fi ↔ Ethernet bridges: you may need to
+```bash
+ros2 action list                    # Should list /navigate_to_pose
+ros2 action info /navigate_to_pose  # See feedback & result types
+```
 
-  1. allow UDP 7400‑7999, or
-  2. set `RMW_DISCOVERY_OPTIONS=LOCALHOST` + static peer list, or
-  3. use ROS 2 bridge relays.
-
-### QoS cheat‑sheet
-
-| Profile     | Reliability   | History      |
-| ----------- | ------------- | ------------ |
-| Sensor data | *best effort* | keep last 10 |
-| Default     | *reliable*    | keep last    |
-
-> Jazzy ships improved *loaned messages* and zero‑copy intra‑process comms.
-
----
-
-## 6  Software‑architecture perspective
-
-* **Node = micro‑service** — encapsulates a single responsibility.
-* **Topic = event bus** — decouples producer/consumer lifecycles.
-* **DDS QoS = contract** — latency vs reliability trade‑offs.
-* **Workspace = mono‑repo** — all packages share ament & Colcon metadata.
-* **Layering**
-  SBC (Orange Pi) ↔ *DDS* ↔ ROS Graph ↔ *micro‑ROS* ↔ ESP32 Firmware.
-
-A sequence diagram is planned in \[`docs/architecture.md`].
-
----
-
-## 7  Where we stand & next milestones
-
-* ✅  Kernel/OS rationale & ROS 2 Jazzy installation
-* ✅  Built and executed *talker ↔ listener*
-* ✅  Explored network internals
-* 🔜  Cross‑compiling micro‑ROS client for ESP32‑S3 & lighting the RGB LED
-* 🔜  Loading and simulating with AMCL map in ROS 2 (localization demo)
-
-> Commit early, commit often. Push this skeleton to GitHub and tag it `v0.1.0-ros2-basics` before moving on.
+> Next steps: swap TurtleBot for your rover URDF, wire up sensors, tune Nav2 params — or dive into micro‑ROS for MCU integration.
 
